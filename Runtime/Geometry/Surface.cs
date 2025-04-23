@@ -1,5 +1,4 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using Tactile.Core.Utility.MeshPart;
@@ -19,7 +18,7 @@ namespace Tactile.UI.Geometry
     public class Surface : MonoBehaviour
     {
         #region Serialized Variables
-        
+
         [SerializeField] private CornerRadii cornerRadii;
         [SerializeField] private float surfaceDepth;
         [SerializeField] private float frontFaceDepth;
@@ -28,7 +27,7 @@ namespace Tactile.UI.Geometry
         [SerializeField] private int cornerVerticesCount = 3;
 
         #endregion
-        
+
         #region Properties
 
         public CornerRadii CornerRadii
@@ -36,7 +35,7 @@ namespace Tactile.UI.Geometry
             get => cornerRadii;
             set => SetAndMarkDirty(out cornerRadii, value);
         }
-        
+
         public int CornerVerticesCount
         {
             get => cornerVerticesCount;
@@ -66,7 +65,7 @@ namespace Tactile.UI.Geometry
             get => useNormalizedUV;
             set => SetAndMarkDirty(out useNormalizedUV, value);
         }
-        
+
         #endregion
 
         private RectTransform _rectTransform;
@@ -91,9 +90,17 @@ namespace Tactile.UI.Geometry
 
         private void OnValidate()
         {
-           MarkDirty();
+            MarkDirty();
         }
-        
+
+        private void LateUpdate()
+        {
+            if (Application.isPlaying && _isDirty)
+            {
+                BuildSurface();
+            }
+        }
+
         private void OnRectTransformDimensionsChange()
         {
             MarkDirty();
@@ -109,20 +116,9 @@ namespace Tactile.UI.Geometry
 
         private void MarkDirty()
         {
-            if (Application.isPlaying && !_isDirty)
-            {
-                StartCoroutine(MarkDirtyCoroutine());
-            }
-        }
-
-        private IEnumerator MarkDirtyCoroutine()
-        {
             _isDirty = true;
-            yield return new WaitForEndOfFrame();
-            BuildSurface();
-            _isDirty = false;
         }
-
+        
         #region Geometry
 
         private void BuildSurface()
@@ -135,6 +131,7 @@ namespace Tactile.UI.Geometry
             OffsetAnchors(surface);
 
             _meshFilter.mesh = surface.CreateMesh();
+            _meshFilter.mesh.name = "Surface Mesh";
         }
 
         private void OffsetAnchors(MeshPart surface)
@@ -149,7 +146,7 @@ namespace Tactile.UI.Geometry
             var uvScale = UseNormalizedUV
                 ? new Vector2(1f / _rectTransform.rect.size.x, 1f / _rectTransform.rect.size.y)
                 : Vector2.one;
-            var uvOffset = -0.5f * (UseNormalizedUV ? Vector2.one : _rectTransform.rect.size);
+            var uvOffset = 0.5f * (UseNormalizedUV ? Vector2.one : Vector2.zero);
             surface.UV.AddRange(surface.Positions.Select(vert => uvOffset + Vector2.Scale(uvScale, vert)));
         }
 
@@ -160,8 +157,7 @@ namespace Tactile.UI.Geometry
                 (1, 5, Direction.Z),
                 (2, 6, Direction.Z),
                 (7, 3, Direction.Z));
-
-
+            
             surface.AddQuads(
                 GetMultiCornerQuad((2, 6, 0, 4), Direction.X),
                 GetMultiCornerQuad((5, 7, 1, 3), Direction.X),
