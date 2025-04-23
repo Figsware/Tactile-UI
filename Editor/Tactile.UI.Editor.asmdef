@@ -3,7 +3,8 @@
     "rootNamespace": "Tactile.UI",
     "references": [
         "GUID:5b8962c181f054a479790d3ab0f87005",
-        "GUID:c30243379fb0c4cc39b4524bf3c3d271"
+        "GUID:c30243379fb0c4cc39b4524bf3c3d271",
+        "GUID:9b295871b8b30084981f4e6e9f838dc8"
     ],
     "includePlatforms": [
         "Editor"

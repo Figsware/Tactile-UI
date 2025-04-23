@@ -2,44 +2,348 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using Tactile.Core.Utility.MeshPart;
+using Tactile.UI.Utility;
 using UnityEngine;
 
-namespace Tactile.UI
+namespace Tactile.UI.Geometry
 {
     /// <summary>
     /// A surface allows you to create a rounded rectangular prism with specified corner sizes. You can specify both
     /// the radi and the depth of the corners, as well as the resolution of the corners by adjusting the number
     /// of corner vertices.
     /// </summary>
+    [RequireComponent(typeof(RectTransform))]
     [RequireComponent(typeof(MeshFilter))]
     [RequireComponent(typeof(MeshRenderer))]
-    [ExecuteInEditMode]
     public class Surface : MonoBehaviour
     {
-        [SerializeField] private Parameters parameters;
-        [SerializeField] private int cornerVertices = 3;
+        #region Serialized Variables
+        
+        [SerializeField] private CornerRadii cornerRadii;
+        [SerializeField] private float surfaceDepth;
+        [SerializeField] private float frontFaceDepth;
+        [SerializeField] private float backFaceDepth;
+        [SerializeField] private bool useNormalizedUV;
+        [SerializeField] private int cornerVerticesCount = 3;
 
-        private Mesh _surfaceMesh;
+        #endregion
+        
+        #region Properties
+
+        public CornerRadii CornerRadii
+        {
+            get => cornerRadii;
+            set => SetAndMarkDirty(out cornerRadii, value);
+        }
+        
+        public int CornerVerticesCount
+        {
+            get => cornerVerticesCount;
+            set => SetAndMarkDirty(out cornerVerticesCount, value);
+        }
+
+        public float SurfaceDepth
+        {
+            get => surfaceDepth;
+            set => SetAndMarkDirty(out surfaceDepth, value);
+        }
+
+        public float FrontFaceDepth
+        {
+            get => frontFaceDepth;
+            set => SetAndMarkDirty(out frontFaceDepth, value);
+        }
+
+        public float BackFaceDepth
+        {
+            get => backFaceDepth;
+            set => SetAndMarkDirty(out backFaceDepth, value);
+        }
+
+        public bool UseNormalizedUV
+        {
+            get => useNormalizedUV;
+            set => SetAndMarkDirty(out useNormalizedUV, value);
+        }
+        
+        #endregion
+
+        private RectTransform _rectTransform;
         private MeshFilter _meshFilter;
+        private Mesh _surfaceMesh;
+        private bool _isDirty;
+
+        private static readonly Dictionary<int, MeshPart> CornerCache = new();
+
+        #region Unity Events
 
         private void Awake()
         {
+            _rectTransform = GetComponent<RectTransform>();
             _meshFilter = GetComponent<MeshFilter>();
+        }
 
+        private void Start()
+        {
             BuildSurface();
         }
 
+        private void OnValidate()
+        {
+           MarkDirty();
+        }
+        
+        private void OnRectTransformDimensionsChange()
+        {
+            MarkDirty();
+        }
+
+        #endregion
+
+        private void SetAndMarkDirty<T>(out T var, T value)
+        {
+            var = value;
+            MarkDirty();
+        }
+
+        private void MarkDirty()
+        {
+            if (Application.isPlaying && !_isDirty)
+            {
+                StartCoroutine(MarkDirtyCoroutine());
+            }
+        }
+
+        private IEnumerator MarkDirtyCoroutine()
+        {
+            _isDirty = true;
+            yield return new WaitForEndOfFrame();
+            BuildSurface();
+            _isDirty = false;
+        }
+
+        #region Geometry
+
         private void BuildSurface()
         {
-            Debug.Log("Create surface mesh!");
-            _surfaceMesh = new Mesh();
-            _surfaceMesh.name = "Surface Mesh";
+            var frontSurface = BuildFace(frontFaceDepth, true);
+            var backSurface = BuildFace(backFaceDepth, false);
+            var surface = MeshPart.Combine(frontSurface, backSurface);
+            BuildSurfaceSides(surface);
+            BuildSurfaceUV(surface);
+            OffsetAnchors(surface);
 
-            var (verts, triangles) = BuildCorner(cornerVertices);
-            _surfaceMesh.vertices = verts;
-            _surfaceMesh.triangles = triangles;
-            _surfaceMesh.Optimize();
-            _meshFilter.mesh = _surfaceMesh;
+            _meshFilter.mesh = surface.CreateMesh();
+        }
+
+        private void OffsetAnchors(MeshPart surface)
+        {
+            var anchorOffset = _rectTransform.rect.size / 2f -
+                               Vector2.Scale(_rectTransform.pivot, _rectTransform.rect.size);
+            surface.Translate(anchorOffset);
+        }
+
+        private void BuildSurfaceUV(MeshPart surface)
+        {
+            var uvScale = UseNormalizedUV
+                ? new Vector2(1f / _rectTransform.rect.size.x, 1f / _rectTransform.rect.size.y)
+                : Vector2.one;
+            var uvOffset = -0.5f * (UseNormalizedUV ? Vector2.one : _rectTransform.rect.size);
+            surface.UV.AddRange(surface.Positions.Select(vert => uvOffset + Vector2.Scale(uvScale, vert)));
+        }
+
+        private void BuildSurfaceSides(MeshPart surface)
+        {
+            StitchCornerEdges(surface,
+                (4, 0, Direction.Z),
+                (1, 5, Direction.Z),
+                (2, 6, Direction.Z),
+                (7, 3, Direction.Z));
+
+
+            surface.AddQuads(
+                GetMultiCornerQuad((2, 6, 0, 4), Direction.X),
+                GetMultiCornerQuad((5, 7, 1, 3), Direction.X),
+                GetMultiCornerQuad((4, 5, 0, 1), Direction.Y),
+                GetMultiCornerQuad((2, 3, 6, 7), Direction.Y)
+            );
+        }
+
+        private MeshPart BuildFace(float faceDepth, bool isFrontFace)
+        {
+            var corner = GetCorner(CornerVerticesCount);
+            var topLeft = corner.Copy();
+            var topRight = corner.Copy();
+            var bottomLeft = corner.Copy();
+            var bottomRight = corner.Copy();
+
+            var rectSize = _rectTransform.rect.size;
+            var maxSize = Mathf.Min(rectSize.x, rectSize.y) / 2f;
+            var topLeftLength = Mathf.Min(maxSize, cornerRadii.topLeft);
+            var topRightLength = Mathf.Min(maxSize, cornerRadii.topRight);
+            var bottomLeftLength = Mathf.Min(maxSize, cornerRadii.bottomLeft);
+            var bottomRightLength = Mathf.Min(maxSize, cornerRadii.bottomRight);
+            var depthOffset = (isFrontFace ? 0 : surfaceDepth) * Vector3.forward;
+            var faceDepthScale = isFrontFace ? -faceDepth : faceDepth;
+
+            // Create corners
+            topLeft.Scale(new Vector3(-topLeftLength, topLeftLength, faceDepthScale));
+            topLeft.Translate(depthOffset + CalculateCornerOffset(Corner.TopLeft, topLeftLength, faceDepth));
+
+            topRight.Scale(new Vector3(topRightLength, topRightLength, faceDepthScale));
+            topRight.Translate(depthOffset + CalculateCornerOffset(Corner.TopRight, topLeftLength, faceDepth));
+            topRight.FlipTriangleFaces();
+
+            bottomLeft.Scale(new Vector3(-bottomLeftLength, -bottomLeftLength, faceDepthScale));
+            bottomLeft.Translate(depthOffset + CalculateCornerOffset(Corner.BottomLeft, bottomLeftLength, faceDepth));
+            bottomLeft.FlipTriangleFaces();
+
+            bottomRight.Scale(new Vector3(bottomRightLength, -bottomRightLength, faceDepthScale));
+            bottomRight.Translate(depthOffset +
+                                  CalculateCornerOffset(Corner.BottomRight, bottomRightLength, faceDepth));
+
+            // Add front face
+            var face = MeshPart.Combine(topLeft, topRight, bottomLeft, bottomRight);
+            face.AddQuad(GetMultiCornerQuad((0, 1, 2, 3), Direction.Z));
+
+            StitchCornerEdges(
+                face,
+                (1, 0, Direction.X),
+                (2, 3, Direction.X),
+                (2, 0, Direction.Y),
+                (1, 3, Direction.Y)
+            );
+
+            if (!isFrontFace)
+            {
+                face.FlipTriangleFaces();
+            }
+
+            return face;
+        }
+
+        private Vector3 CalculateCornerOffset(Corner corner, float cornerSize, float depth)
+        {
+            var cornerReflection = corner switch
+            {
+                Corner.TopLeft => new Vector2(-1, 1),
+                Corner.TopRight => new Vector2(1, 1),
+                Corner.BottomLeft => new Vector2(-1, -1),
+                Corner.BottomRight => new Vector2(1, -1),
+                _ => throw new ArgumentOutOfRangeException(nameof(corner), corner, null)
+            };
+
+            var cornerVec = Vector2.Scale(_rectTransform.rect.size / 2f - cornerSize * Vector2.one, cornerReflection);
+            var offsetVec = new Vector3(cornerVec.x, cornerVec.y, depth);
+
+            return offsetVec;
+        }
+
+        private void StitchCornerEdges(MeshPart part,
+            params (int fromCornerIndex, int toCornerIndex, Direction planeNormal)[] stitches)
+        {
+            foreach (var stitch in stitches)
+            {
+                StitchCornerEdges(part, stitch.fromCornerIndex, stitch.toCornerIndex, stitch.planeNormal);
+            }
+        }
+
+        private void StitchCornerEdges(MeshPart part, int fromCornerIndex, int toCornerIndex, Direction planeNormal)
+        {
+            var (firstEdge, secondEdge) = planeNormal switch
+            {
+                Direction.X => (Direction.Z, Direction.Y),
+                Direction.Y => (Direction.X, Direction.Z),
+                Direction.Z => (Direction.Y, Direction.X),
+                _ => throw new ArgumentOutOfRangeException(nameof(planeNormal), planeNormal, null)
+            };
+
+            var fromFirstCornerStart = GetCornerFeatureIndex(fromCornerIndex, CornerFeature.CornerStart, firstEdge);
+            var toFirstCornerStart = GetCornerFeatureIndex(toCornerIndex, CornerFeature.CornerStart, firstEdge);
+            var fromSecondCornerStart = GetCornerFeatureIndex(fromCornerIndex, CornerFeature.CornerStart, secondEdge);
+            var toSecondCornerStart = GetCornerFeatureIndex(toCornerIndex, CornerFeature.CornerStart, secondEdge);
+
+            // Stitch unique edges
+            for (var i = 0; i < cornerVerticesCount - 1; i++)
+            {
+                var tl1 = fromFirstCornerStart + i;
+                var tr1 = toFirstCornerStart + i;
+                var bl1 = fromFirstCornerStart + i + 1;
+                var br1 = toFirstCornerStart + i + 1;
+
+                var tl2 = toSecondCornerStart + i * cornerVerticesCount;
+                var tr2 = fromSecondCornerStart + i * cornerVerticesCount;
+                var bl2 = toSecondCornerStart + (i + 1) * cornerVerticesCount;
+                var br2 = fromSecondCornerStart + (i + 1) * cornerVerticesCount;
+
+                part.AddQuads(
+                    (tl1, tr1, bl1, br1),
+                    (tl2, tr2, bl2, br2));
+            }
+
+            // Stitch seams
+            var lastUniqueEdgeStart1 = fromFirstCornerStart + cornerVerticesCount - 1;
+            var lastUniqueEdgeEnd1 = toFirstCornerStart + cornerVerticesCount - 1;
+            var lastUniqueEdgeStart2 = fromSecondCornerStart + cornerVerticesCount * (cornerVerticesCount - 1);
+            var lastUniqueEdgeEnd2 = toSecondCornerStart + cornerVerticesCount * (cornerVerticesCount - 1);
+            var seamStart = GetCornerFeatureIndex(fromCornerIndex, CornerFeature.StitchEdgeStart, secondEdge);
+            var seamEnd = GetCornerFeatureIndex(toCornerIndex, CornerFeature.StitchEdgeStart, secondEdge);
+
+            part.AddQuads(
+                (lastUniqueEdgeStart1, lastUniqueEdgeEnd1, seamStart, seamEnd),
+                (seamStart, seamEnd, lastUniqueEdgeStart2, lastUniqueEdgeEnd2));
+        }
+
+        private (int topLeft, int topRight, int bottomLeft, int bottomRight) GetMultiCornerQuad(
+            (int topLeft, int topRight, int bottomLeft, int bottomRight) cornerIndices, Direction direction)
+        {
+            return (
+                GetCornerFeatureIndex(cornerIndices.topLeft, CornerFeature.CornerStart, direction),
+                GetCornerFeatureIndex(cornerIndices.topRight, CornerFeature.CornerStart, direction),
+                GetCornerFeatureIndex(cornerIndices.bottomLeft, CornerFeature.CornerStart, direction),
+                GetCornerFeatureIndex(cornerIndices.bottomRight, CornerFeature.CornerStart, direction));
+        }
+
+        private int GetCornerFeatureIndex(int cornerIndex, CornerFeature feature, Direction direction)
+        {
+            var vertices = CalculateCornerVerticesCount(cornerVerticesCount);
+
+            return (cornerIndex * vertices.TotalVertices) + (feature, direction) switch
+            {
+                (CornerFeature.CornerStart, Direction.X) => 0,
+                (CornerFeature.CornerStart, Direction.Y) => vertices.VerticesPerFace,
+                (CornerFeature.CornerStart, Direction.Z) => 2 * vertices.VerticesPerFace,
+                (CornerFeature.StitchEdgeStart, Direction.X) => vertices.TotalFaceVertices,
+                (CornerFeature.StitchEdgeStart, Direction.Y) => vertices.TotalFaceVertices +
+                                                                vertices.VerticesPerStichEdge,
+                (CornerFeature.StitchEdgeStart, Direction.Z) => vertices.TotalFaceVertices +
+                                                                2 * vertices.VerticesPerStichEdge,
+                _ => throw new ArgumentOutOfRangeException()
+            };
+        }
+
+        private static (int VerticesPerFace, int TotalFaceVertices, int VerticesPerStichEdge, int TotalVertices)
+            CalculateCornerVerticesCount(int cornerSubdivisions)
+        {
+            var verticesPerFace = cornerSubdivisions * cornerSubdivisions;
+            var totalFaceVertices = 3 * verticesPerFace;
+            var verticesPerStitchEdge = cornerSubdivisions;
+            var totalVertices = totalFaceVertices + 3 * verticesPerStitchEdge + 1;
+            return (verticesPerFace, totalFaceVertices, verticesPerStitchEdge, totalVertices);
+        }
+
+        private static MeshPart GetCorner(int cornerSubdivisions)
+        {
+            if (CornerCache.TryGetValue(cornerSubdivisions, out var cachedCorner))
+            {
+                return cachedCorner;
+            }
+
+            var builtCorner = BuildCorner(cornerSubdivisions);
+            CornerCache[cornerSubdivisions] = builtCorner;
+
+            return builtCorner;
         }
 
         /// <summary>
@@ -47,28 +351,33 @@ namespace Tactile.UI
         /// </summary>
         /// <param name="cornerSubdivisions">The number of times to subdivide the corner</param>
         /// <returns>A tuple of the corner's vertices and triangles</returns>
-        private static (Vector3[], int[]) BuildCorner(int cornerSubdivisions)
+        private static MeshPart BuildCorner(int cornerSubdivisions)
         {
+            var cornerPart = new MeshPart();
+
+            var (numFaceVertices, totalFaceVertices, numEdgeVertices, totalVertices) =
+                CalculateCornerVerticesCount(cornerSubdivisions);
+
             // Create the corner vertices that are unique to each of the three corner "faces"
-            float oneOverVerts = 1f / cornerSubdivisions;
-            int numFaceVertices = cornerSubdivisions * cornerSubdivisions;
-            int totalFaceVertices = 3 * numFaceVertices;
-            int numEdgeVertices = cornerSubdivisions;
-            int totalVerts = totalFaceVertices + 3 * numEdgeVertices + 1;
-            Vector3[] cornerVertices = new Vector3[totalVerts];
-            
+            var oneOverVertices = 1f / cornerSubdivisions;
+
+            cornerPart.Positions.Capacity = totalVertices;
+            cornerPart.Positions.AddRange(Enumerable.Repeat(Vector3.zero, totalVertices));
+
+            var cornerVertices = cornerPart.Positions;
+
             // Create the vertices that are unique to each "face" of the corner.
-            for (int y = 0; y < cornerSubdivisions; y++)
+            for (var y = 0; y < cornerSubdivisions; y++)
             {
-                for (int x = 0; x < cornerSubdivisions; x++)
+                for (var x = 0; x < cornerSubdivisions; x++)
                 {
-                    int i = y * cornerSubdivisions + x;
+                    var i = y * cornerSubdivisions + x;
 
                     // We create a curved corner by placing vertices along the faces of a cube, then normalizing
                     // these vectors so that they conform to the surface of a sphere.
-                    Vector3 edgeVertX = new Vector3(1f, y * oneOverVerts, x * oneOverVerts).normalized;
-                    Vector3 edgeVertY = new Vector3(x * oneOverVerts, 1f, y * oneOverVerts).normalized;
-                    Vector3 edgeVertZ = new Vector3(y * oneOverVerts, x * oneOverVerts, 1f).normalized;
+                    var edgeVertX = new Vector3(1f, y * oneOverVertices, x * oneOverVertices).normalized;
+                    var edgeVertY = new Vector3(x * oneOverVertices, 1f, y * oneOverVertices).normalized;
+                    var edgeVertZ = new Vector3(y * oneOverVertices, x * oneOverVertices, 1f).normalized;
 
                     cornerVertices[i] = edgeVertX;
                     cornerVertices[i + numFaceVertices] = edgeVertY;
@@ -77,108 +386,99 @@ namespace Tactile.UI
             }
 
             // Create the edges that will "stitch" the different corner faces together into a larger corner.
-            for (int i = 0; i < cornerSubdivisions; i++)
+            for (var i = 0; i < cornerSubdivisions; i++)
             {
-                Vector3 edgeVertXY = new Vector3(1f, 1f, i * oneOverVerts).normalized;
-                Vector3 edgeVertYZ = new Vector3(i * oneOverVerts, 1f, 1f).normalized;
-                Vector3 edgeVertXZ = new Vector3(1f, i * oneOverVerts, 1f).normalized;
+                var edgeVertXY = new Vector3(1f, 1f, i * oneOverVertices).normalized;
+                var edgeVertYZ = new Vector3(i * oneOverVertices, 1f, 1f).normalized;
+                var edgeVertXZ = new Vector3(1f, i * oneOverVertices, 1f).normalized;
 
                 cornerVertices[i + totalFaceVertices] = edgeVertXY;
                 cornerVertices[i + totalFaceVertices + numEdgeVertices] = edgeVertYZ;
                 cornerVertices[i + totalFaceVertices + 2 * numEdgeVertices] = edgeVertXZ;
             }
-            
+
             // Add center vert
-            cornerVertices[cornerVertices.Length - 1] = Vector3.one.normalized;
-            
+            cornerVertices[^1] = Vector3.one.normalized;
+
             // Create triangles
-            List<int> triangles = new List<int>();
+            var triangles = cornerPart.Triangles;
             triangles.Capacity = 6 * cornerSubdivisions;
-            int gridQuads = cornerSubdivisions - 1;
-            int centerVert = totalVerts - 1;
-            
-            for (int z = 0; z < 3; z++)
+            var gridQuads = cornerSubdivisions - 1;
+            var centerVert = totalVertices - 1;
+
+            for (var z = 0; z < 3; z++)
             {
-                for (int y = 0; y < gridQuads + 1; y++)
+                for (var y = 0; y < gridQuads + 1; y++)
                 {
-                    for (int x = 0; x < gridQuads + 1; x++)
+                    for (var x = 0; x < gridQuads + 1; x++)
                     {
-                        int offset = z * (int)Mathf.Pow(gridQuads + 1, 2);
-                        int i = offset + y * (gridQuads + 1) + x;
-                        int i2 = offset + (gridQuads - y) * (gridQuads + 1) + (gridQuads - x);
-                        int edgeVertX = totalFaceVertices + ((z + 2) * cornerSubdivisions + y) % (cornerSubdivisions * 3);
-                        int edgeVertY = totalFaceVertices + (z * cornerSubdivisions + x) % (cornerSubdivisions * 3);
+                        var offset = z * (int)Mathf.Pow(gridQuads + 1, 2);
+                        var i = offset + y * (gridQuads + 1) + x;
+                        var i2 = offset + (gridQuads - y) * (gridQuads + 1) + (gridQuads - x);
+                        var edgeVertX = totalFaceVertices +
+                                        ((z + 2) * cornerSubdivisions + y) % (cornerSubdivisions * 3);
+                        var edgeVertY = totalFaceVertices + (z * cornerSubdivisions + x) % (cornerSubdivisions * 3);
 
                         // Center Vert
-                        if (x == gridQuads && y == gridQuads) 
+                        if (x == gridQuads && y == gridQuads)
                         {
-                            triangles.AddRange(new[] { i, edgeVertY, edgeVertX });
-                            triangles.AddRange(new[] { edgeVertY, centerVert, edgeVertX });
+                            cornerPart.AddTriangles(
+                                (i, edgeVertY, edgeVertX),
+                                (i, edgeVertY, edgeVertX),
+                                (edgeVertY, centerVert, edgeVertX));
                         }
                         // X Edge
                         else if (x == gridQuads)
                         {
-                            triangles.AddRange(new[] { i, i + cornerSubdivisions, edgeVertX });
-                            triangles.AddRange(new[] { edgeVertX + 1, edgeVertX, i + cornerSubdivisions });
+                            cornerPart.AddTriangles(
+                                (i, i + cornerSubdivisions, edgeVertX),
+                                (edgeVertX + 1, edgeVertX, i + cornerSubdivisions));
                         }
                         // Y Edge
                         else if (y == gridQuads)
                         {
-                            triangles.AddRange(new[] { i, edgeVertY, i + 1 });
-                            triangles.AddRange(new[] { edgeVertY + 1, i + 1, edgeVertY });
+                            cornerPart.AddTriangles(
+                                (i, edgeVertY, i + 1),
+                                (edgeVertY + 1, i + 1, edgeVertY));
                         }
                         else
                         {
-                            triangles.AddRange(new[] { i, i + gridQuads + 1, i + 1 });
-                            triangles.AddRange(new[] { i2, i2 - (gridQuads + 1), i2 - 1 });
+                            cornerPart.AddTriangles(
+                                (i, i + gridQuads + 1, i + 1),
+                                (i2, i2 - (gridQuads + 1), i2 - 1));
                         }
                     }
                 }
             }
 
-            return (cornerVertices, triangles.ToArray());
+            return cornerPart;
         }
 
-        private void OnDrawGizmosSelected()
+        #endregion
+
+        #region Enums
+
+        private enum Corner
         {
-            Gizmos.matrix = transform.localToWorldMatrix;
-            Gizmos.color = Color.green;
-            Gizmos.DrawWireCube(Vector3.zero, parameters.Size);
+            TopLeft,
+            TopRight,
+            BottomLeft,
+            BottomRight
         }
 
-        [Serializable]
-        public struct Parameters
+        private enum Direction
         {
-            /* 
-             *                 +-=-=-=-=-=-=-=-=-=-=-=-=+
-             *               /                        / |
-             *             /       TOP VIEW         /   |
-             *           /                        /     |
-             *    TL   + =-=-=-=- TLTR -=-=-=-=-=+  TR  |
-             *         |                        |       |
-             *                                          |
-             *         T                        T       |
-             *         L         FRONT          R       |
-             *         B         VIEW           B       +  
-             *         L                        R     /
-             *                                      /
-             *         |                        | /
-             *    BL   +-=-=-=-=- BLBR -=-=-=-=-=+  BR
-             *    
-             */
-            
-            public Vector3 Size;
-            public float topLeftRadius;
-            public float topRightRadius;
-            public float bottomLeftRadius;
-            public float bottomRightRadius;
-            public float frontDepth;
-            public float dackDepth;
-
-            public float TLTREdge => 0;
-            public float TLBLEdge => 0;
-            public float TRBREdge => 0;
-            public float BLBREdge => 0;
+            X,
+            Y,
+            Z
         }
+
+        private enum CornerFeature
+        {
+            CornerStart,
+            StitchEdgeStart
+        }
+
+        #endregion
     }
 }
