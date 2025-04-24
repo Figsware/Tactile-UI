@@ -1,6 +1,6 @@
 {
   "name": "com.figsware.tactile.ui",
-  "version": "0.1.8",
+  "version": "0.2.0",
   "displayName": "Tactile UI",
   "description": "Scripts and components for user interfaces",
   "unity": "2019.1",
