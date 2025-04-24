@@ -4,7 +4,7 @@ using Tactile.UI.Utility;
 using UnityEngine;
 using UnityEngine.UI;
 
-namespace Tactile.UI
+namespace Tactile.UI.Geometry
 {
     /// <summary>
     /// A rectangle that can have each of its corners curved. A number of corner vertices can be specified to increase
