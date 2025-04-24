@@ -100,7 +100,10 @@ namespace Tactile.UI.Geometry
 
         private void OnValidate()
         {
-            MarkDirty();
+            if (_rectTransform && _meshRenderer)
+            {
+                MarkDirty();    
+            }
         }
 
         private void LateUpdate()
@@ -139,16 +142,6 @@ namespace Tactile.UI.Geometry
             if (Application.isPlaying)
             {
                 return;
-            }
-
-            if (!_rectTransform)
-            {
-                _rectTransform = GetComponent<RectTransform>();
-            }
-
-            if (!_meshRenderer)
-            {
-                _meshRenderer = GetComponent<MeshRenderer>();
             }
             
             if (!_surfaceMesh)
