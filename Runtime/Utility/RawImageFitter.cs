@@ -4,7 +4,7 @@ using UnityEngine.UI;
 namespace Tactile.UI.Utility
 {
     [RequireComponent(typeof(RawImage))]
-    [RequireComponent(typeof(RawImageFitter))]
+    [RequireComponent(typeof(AspectRatioFitter))]
     public class RawImageFitter : MonoBehaviour
     {
         private RawImage _rawImage;
