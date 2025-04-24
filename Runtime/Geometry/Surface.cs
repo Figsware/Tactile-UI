@@ -88,9 +88,7 @@ namespace Tactile.UI.Geometry
 
         private void Awake()
         {
-            _rectTransform = GetComponent<RectTransform>();
-            _meshFilter = GetComponent<MeshFilter>();
-            _meshRenderer = GetComponent<MeshRenderer>();
+            GetComponents();
         }
         
         private void Start()
@@ -99,11 +97,8 @@ namespace Tactile.UI.Geometry
         }
 
         private void OnValidate()
-        {
-            if (_rectTransform && _meshRenderer)
-            {
-                MarkDirty();    
-            }
+        { 
+            MarkDirty();    
         }
 
         private void LateUpdate()
@@ -174,10 +169,24 @@ namespace Tactile.UI.Geometry
             }
         }
 
+        private void GetComponents()
+        {
+            if (!_rectTransform)
+                _rectTransform = GetComponent<RectTransform>();
+            
+            if (!_meshFilter)
+                _meshFilter = GetComponent<MeshFilter>();
+            
+            if (!_meshRenderer)
+                _meshRenderer = GetComponent<MeshRenderer>();
+        }
+
         #region Geometry
 
         private void BuildSurface()
         {
+            GetComponents();
+            
             var frontSurface = BuildFace(frontFaceDepth, true);
             var backSurface = BuildFace(backFaceDepth, false);
             var surface = MeshPart.Combine(frontSurface, backSurface);
