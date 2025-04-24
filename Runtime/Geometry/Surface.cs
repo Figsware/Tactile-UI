@@ -15,6 +15,7 @@ namespace Tactile.UI.Geometry
     [RequireComponent(typeof(RectTransform))]
     [RequireComponent(typeof(MeshFilter))]
     [RequireComponent(typeof(MeshRenderer))]
+    [ExecuteInEditMode]
     public class Surface : MonoBehaviour
     {
         #region Serialized Variables
@@ -25,6 +26,7 @@ namespace Tactile.UI.Geometry
         [SerializeField] private float backFaceDepth;
         [SerializeField] private bool useNormalizedUV;
         [SerializeField] private int cornerVerticesCount = 3;
+        [SerializeField] private float depthOffset = 0.001f;
 
         #endregion
 
@@ -66,10 +68,17 @@ namespace Tactile.UI.Geometry
             set => SetAndMarkDirty(out useNormalizedUV, value);
         }
 
+        public float DepthOffset
+        {
+            get => depthOffset;
+            set => SetAndMarkDirty(out depthOffset, value);
+        }
+
         #endregion
 
         private RectTransform _rectTransform;
         private MeshFilter _meshFilter;
+        private MeshRenderer _meshRenderer;
         private Mesh _surfaceMesh;
         private bool _isDirty;
 
@@ -81,8 +90,9 @@ namespace Tactile.UI.Geometry
         {
             _rectTransform = GetComponent<RectTransform>();
             _meshFilter = GetComponent<MeshFilter>();
+            _meshRenderer = GetComponent<MeshRenderer>();
         }
-
+        
         private void Start()
         {
             BuildSurface();
@@ -105,6 +115,42 @@ namespace Tactile.UI.Geometry
         {
             MarkDirty();
         }
+        
+        #if UNITY_EDITOR
+        
+        private void OnEnable()
+        {
+            if (!Application.isPlaying)
+            {
+                Camera.onPreCull += OnCameraPreCull;
+            }
+            
+        }
+
+        private void OnDisable()
+        {
+            if (!Application.isPlaying)
+            {
+                Camera.onPreCull -= OnCameraPreCull;    
+            }
+        }
+        
+        private void OnCameraPreCull(Camera drawingCamera)
+        {
+            if (Application.isPlaying)
+            {
+                return;
+            }
+
+            if (!_surfaceMesh)
+            {
+                BuildSurface();
+            }
+            
+            Graphics.DrawMesh(_surfaceMesh, transform.localToWorldMatrix, _meshRenderer.sharedMaterial, gameObject.layer);
+        }
+        
+        #endif
 
         #endregion
 
@@ -116,9 +162,16 @@ namespace Tactile.UI.Geometry
 
         private void MarkDirty()
         {
-            _isDirty = true;
+            if (Application.isPlaying)
+            {
+                _isDirty = true;
+            }
+            else
+            {
+                BuildSurface();
+            }
         }
-        
+
         #region Geometry
 
         private void BuildSurface()
@@ -128,17 +181,20 @@ namespace Tactile.UI.Geometry
             var surface = MeshPart.Combine(frontSurface, backSurface);
             BuildSurfaceSides(surface);
             BuildSurfaceUV(surface);
-            OffsetAnchors(surface);
+            OffsetSurface(surface);
 
-            _meshFilter.mesh = surface.CreateMesh();
-            _meshFilter.mesh.name = "Surface Mesh";
+            _surfaceMesh = surface.CreateMesh();
+            _surfaceMesh.name = "Surface Mesh";
+
+            if (Application.isPlaying)
+            {
+                _meshFilter.mesh = _surfaceMesh;
+            }
         }
 
-        private void OffsetAnchors(MeshPart surface)
+        private void OffsetSurface(MeshPart surface)
         {
-            var anchorOffset = _rectTransform.rect.size / 2f -
-                               Vector2.Scale(_rectTransform.pivot, _rectTransform.rect.size);
-            surface.Translate(anchorOffset);
+            surface.Translate(CalculateSurfaceOffset());
         }
 
         private void BuildSurfaceUV(MeshPart surface)
@@ -157,7 +213,7 @@ namespace Tactile.UI.Geometry
                 (1, 5, Direction.Z),
                 (2, 6, Direction.Z),
                 (7, 3, Direction.Z));
-            
+
             surface.AddQuads(
                 GetMultiCornerQuad((2, 6, 0, 4), Direction.X),
                 GetMultiCornerQuad((5, 7, 1, 3), Direction.X),
@@ -180,24 +236,23 @@ namespace Tactile.UI.Geometry
             var topRightLength = Mathf.Min(maxSize, cornerRadii.topRight);
             var bottomLeftLength = Mathf.Min(maxSize, cornerRadii.bottomLeft);
             var bottomRightLength = Mathf.Min(maxSize, cornerRadii.bottomRight);
-            var depthOffset = (isFrontFace ? 0 : surfaceDepth) * Vector3.forward;
+            faceDepth = Mathf.Min(surfaceDepth / 2f, faceDepth);
             var faceDepthScale = isFrontFace ? -faceDepth : faceDepth;
 
             // Create corners
             topLeft.Scale(new Vector3(-topLeftLength, topLeftLength, faceDepthScale));
-            topLeft.Translate(depthOffset + CalculateCornerOffset(Corner.TopLeft, topLeftLength, faceDepth));
+            topLeft.Translate(CalculateCornerOffset(Corner.TopLeft, topLeftLength, isFrontFace, faceDepth));
 
             topRight.Scale(new Vector3(topRightLength, topRightLength, faceDepthScale));
-            topRight.Translate(depthOffset + CalculateCornerOffset(Corner.TopRight, topLeftLength, faceDepth));
+            topRight.Translate(CalculateCornerOffset(Corner.TopRight, topRightLength, isFrontFace, faceDepth));
             topRight.FlipTriangleFaces();
 
             bottomLeft.Scale(new Vector3(-bottomLeftLength, -bottomLeftLength, faceDepthScale));
-            bottomLeft.Translate(depthOffset + CalculateCornerOffset(Corner.BottomLeft, bottomLeftLength, faceDepth));
+            bottomLeft.Translate(CalculateCornerOffset(Corner.BottomLeft, bottomLeftLength, isFrontFace, faceDepth));
             bottomLeft.FlipTriangleFaces();
 
             bottomRight.Scale(new Vector3(bottomRightLength, -bottomRightLength, faceDepthScale));
-            bottomRight.Translate(depthOffset +
-                                  CalculateCornerOffset(Corner.BottomRight, bottomRightLength, faceDepth));
+            bottomRight.Translate(CalculateCornerOffset(Corner.BottomRight, bottomRightLength, isFrontFace, faceDepth));
 
             // Add front face
             var face = MeshPart.Combine(topLeft, topRight, bottomLeft, bottomRight);
@@ -219,7 +274,16 @@ namespace Tactile.UI.Geometry
             return face;
         }
 
-        private Vector3 CalculateCornerOffset(Corner corner, float cornerSize, float depth)
+        private Vector3 CalculateSurfaceOffset()
+        {
+            var anchorOffset = _rectTransform.rect.size / 2f -
+                               Vector2.Scale(_rectTransform.pivot, _rectTransform.rect.size);
+            var offset = new Vector3(anchorOffset.x, anchorOffset.y, depthOffset);
+
+            return offset;
+        }
+
+        private Vector3 CalculateCornerOffset(Corner corner, float cornerSize, bool isFrontFace, float depth)
         {
             var cornerReflection = corner switch
             {
@@ -231,7 +295,8 @@ namespace Tactile.UI.Geometry
             };
 
             var cornerVec = Vector2.Scale(_rectTransform.rect.size / 2f - cornerSize * Vector2.one, cornerReflection);
-            var offsetVec = new Vector3(cornerVec.x, cornerVec.y, depth);
+            var offsetDepth = isFrontFace ? depth : surfaceDepth - depth;
+            var offsetVec = new Vector3(cornerVec.x, cornerVec.y, offsetDepth);
 
             return offsetVec;
         }
