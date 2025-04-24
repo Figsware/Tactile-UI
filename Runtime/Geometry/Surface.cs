@@ -125,7 +125,7 @@ namespace Tactile.UI.Geometry
         {
             if (!Application.isPlaying)
             {
-                Camera.onPreCull += OnCameraPreCull;
+                UnityEditor.SceneView.duringSceneGui += OnSceneGUI;
             }
         }
 
@@ -133,11 +133,11 @@ namespace Tactile.UI.Geometry
         {
             if (!Application.isPlaying)
             {
-                Camera.onPreCull -= OnCameraPreCull;    
+                UnityEditor.SceneView.duringSceneGui -= OnSceneGUI;    
             }
         }
         
-        private void OnCameraPreCull(Camera drawingCamera)
+        private void OnSceneGUI(UnityEditor.SceneView sceneView)
         {
             if (Application.isPlaying)
             {
