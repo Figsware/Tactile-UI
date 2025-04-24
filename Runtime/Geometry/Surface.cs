@@ -124,7 +124,6 @@ namespace Tactile.UI.Geometry
             {
                 Camera.onPreCull += OnCameraPreCull;
             }
-            
         }
 
         private void OnDisable()
@@ -142,6 +141,16 @@ namespace Tactile.UI.Geometry
                 return;
             }
 
+            if (!_rectTransform)
+            {
+                _rectTransform = GetComponent<RectTransform>();
+            }
+
+            if (!_meshRenderer)
+            {
+                _meshRenderer = GetComponent<MeshRenderer>();
+            }
+            
             if (!_surfaceMesh)
             {
                 BuildSurface();
