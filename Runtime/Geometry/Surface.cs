@@ -106,6 +106,7 @@ namespace Tactile.UI.Geometry
             if (Application.isPlaying && _isDirty)
             {
                 BuildSurface();
+                _isDirty = false;
             }
         }
 
@@ -131,7 +132,21 @@ namespace Tactile.UI.Geometry
                 UnityEditor.SceneView.duringSceneGui -= OnSceneGUI;    
             }
         }
-        
+
+        private void OnDestroy()
+        {
+            if (!_surfaceMesh) return;
+            
+            if (Application.isPlaying)
+            {
+                Destroy(_surfaceMesh);
+            }
+            else
+            {
+                DestroyImmediate(_surfaceMesh);
+            }
+        }
+
         private void OnSceneGUI(UnityEditor.SceneView sceneView)
         {
             if (Application.isPlaying)
@@ -194,8 +209,15 @@ namespace Tactile.UI.Geometry
             BuildSurfaceUV(surface);
             OffsetSurface(surface);
 
-            _surfaceMesh = surface.CreateMesh();
-            _surfaceMesh.name = "Surface Mesh";
+            if (!_surfaceMesh)
+            {
+                _surfaceMesh = new Mesh
+                {
+                    name = "Surface Mesh"
+                };
+            }
+            
+            surface.ApplyToMesh(_surfaceMesh);
 
             if (Application.isPlaying)
             {
